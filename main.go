@@ -7,8 +7,12 @@ import (
 	"math/rand"
 	"time"
 
+	"math"
+	"encoding/binary"
 	"github.com/hajimehoshi/ebiten"
 	"github.com/hajimehoshi/ebiten/ebitenutil"
+	"github.com/mesilliac/pulse-simple"
+    _ "embed"
 )
 
 const RES int = 400
@@ -20,6 +24,7 @@ type Game struct {
 
 var (
 	g *Game
+	audio *Audio
 )
 
 // A board with empty state
@@ -134,11 +139,15 @@ func interaction(x int, y int, g *Game) *Game {
 func update(screen *ebiten.Image) error {
 	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
 		x, y := ebiten.CursorPosition()
+		log.Printf("x: %v y: %v", x, y)
 		interaction(x, y, g)
+		audio.PlayBeep()
 	}
+
 	if ebiten.IsDrawingSkipped() {
 		return nil
 	}
+
 	screen.Fill(color.RGBA{0, 0, 0, 0xff})
 	background, _ := ebiten.NewImage(RES, RES, ebiten.FilterDefault)
 	g = logic(g)
@@ -148,9 +157,84 @@ func update(screen *ebiten.Image) error {
 	return nil
 }
 
+type Audio struct {
+    stream         *pulse.Stream
+    sampleRate     float64
+    outputChannels int
+    channel        chan float32
+}
+
+func NewAudio() *Audio {
+    a := &Audio{
+        channel: make(chan float32, 1024),
+    }
+    return a
+}
+
+func (a *Audio) Start() error {
+    ss := pulse.SampleSpec{
+        Format:   pulse.SAMPLE_FLOAT32LE,
+        Rate:     44100,
+        Channels: 1,
+    }
+    stream, err := pulse.Playback("Conway's Game of Life", "Audio Stream", &ss)
+    if err != nil {
+        return fmt.Errorf("PulseAudio 스트림 생성 실패: %v", err)
+    }
+    a.stream = stream
+    a.sampleRate = float64(ss.Rate)
+    a.outputChannels = int(ss.Channels)
+    go a.play()
+    return nil
+}
+
+func (a *Audio) play() {
+    for {
+        buf := make([]float32, 1024)
+        for i := range buf {
+            select {
+            case sample := <-a.channel:
+                buf[i] = sample
+            default:
+                buf[i] = 0
+            }
+        }
+        byteBuf := make([]byte, len(buf)*4)
+        for i, sample := range buf {
+            binary.LittleEndian.PutUint32(byteBuf[i*4:], math.Float32bits(sample))
+        }
+        a.stream.Write(byteBuf)
+    }
+}
+
+func (a *Audio) Stop() error {
+    if a.stream != nil {
+        a.stream.Free()
+    }
+    return nil
+}
+
+func (a *Audio) PlayBeep() {
+    duration := 0.01
+    freq := 440.0
+    for i := 0; i < int(duration * a.sampleRate); i++ {
+        t := float64(i) / a.sampleRate
+        sample := float32(math.Sin(2 * math.Pi * freq * t) * 0.5)
+        a.channel <- sample
+    }
+}
+
 func main() {
 	g = emptyGeneration()
 	giveState(g)
+
+	audio = NewAudio()
+    err := audio.Start()
+    if err != nil {
+        log.Printf("오디오 초기화 실패: %v", err)
+    }
+	defer audio.Stop()
+
 	if err := ebiten.Run(update, RES, RES, 2, "Conway's Game of Life"); err != nil {
 		log.Fatal(err)
 	}
