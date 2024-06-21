@@ -16,21 +16,18 @@ RUN apt-get update && apt-get install -y \
     pulseaudio-utils \
     libpulse-dev \
     git \
-    golang-go
-
-# ffmpeg 설치
-RUN apt-get install -y ffmpeg
+    golang-go \
+    ffmpeg \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY . .
-RUN go mod tidy && \
-    go mod download
-
-RUN go get github.com/go-gl/gl/v2.1/gl && \
-    go get github.com/go-gl/glfw/v3.2/glfw && \
-    go get github.com/mesilliac/pulse-simple
-
-RUN go build -v -o nesexe
+RUN go mod tidy
+RUN go build -o conways-game-of-life
 
 ENV DISPLAY=:1
 ENV PULSE_LATENCY_MSEC=1
@@ -43,6 +40,6 @@ pacmd set-default-sink v1\n\
 pacmd set-default-source v1.monitor" > pulseaudio-setup.sh && \
 chmod +x pulseaudio-setup.sh
 
-# ffmpeg에서 GPU 가속 사용을 위한 옵션 추가
-CMD ["bash", "-c", "./pulseaudio-setup.sh && Xvfb :1 -screen 0 400x400x24 & sleep 10 && DISPLAY=:1 go run main.go && ffmpeg -f pulse -i default -f x11grab -s 400x400 -i :1 -map 0:a:0 -c:a libopus -compression_level 0 -b:a 24k -af aresample=async=0.5 -map 1:v:0 -r 60 -c:v libx264 -preset ultrafast -tune zerolatency -b:v 1000k -f rtsp rtsp://mtx:8554/mystream"]
+CMD ["bash", "-c", "./pulseaudio-setup.sh && Xvfb :1 -screen 0 400x400x24 & sleep 10 && DISPLAY=:1 ./conways-game-of-life & sleep 1 && ffmpeg -f pulse -i default -f x11grab -s 400x400 -i :1 -map 0:a:0 -c:a libopus -compression_level 0 -b:a 24k -af aresample=async=0.5 -map 1:v:0 -r 60 -c:v libx264 -preset ultrafast -tune zerolatency -b:v 1000k -f rtsp rtsp://mtx:8554/mystream"]
+
 EXPOSE 8080
