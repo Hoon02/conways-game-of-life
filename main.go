@@ -13,6 +13,9 @@ import (
 	"github.com/hajimehoshi/ebiten/ebitenutil"
 	"github.com/mesilliac/pulse-simple"
     _ "embed"
+	"net/http"
+    "github.com/gorilla/websocket"
+	"encoding/json"
 )
 
 const RES int = 400
@@ -136,17 +139,71 @@ func interaction(x int, y int, g *Game) *Game {
 	return g
 }
 
-func update(screen *ebiten.Image) error {
-	if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
-		x, y := ebiten.CursorPosition()
-		log.Printf("x: %v y: %v", x, y)
-		interaction(x, y, g)
-		audio.PlayBeep()
-	}
+var upgrader = websocket.Upgrader{
+    ReadBufferSize:  1024,
+    WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+        return true
+    },
+}
 
-	if ebiten.IsDrawingSkipped() {
-		return nil
-	}
+type MouseEvent struct {
+    X, Y int
+}
+
+var mouseEvents = make(chan MouseEvent, 100)
+
+func initWebsocket() {
+    http.HandleFunc("/mouse", handleWebSocket)
+    go http.ListenAndServe(":8080", nil)
+}
+
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Println("웹소켓 연결 설정 오류:", err)
+        return
+    }
+    defer conn.Close()
+
+    for {
+        _, message, err := conn.ReadMessage()
+        if err != nil {
+            log.Println("메시지 읽기 오류:", err)
+            break
+        }
+        
+        var event MouseEvent
+        if err := json.Unmarshal(message, &event); err != nil {
+            log.Println("JSON 파싱 오류:", err)
+            continue
+        }
+        
+        select {
+        case mouseEvents <- event:
+        default:
+        }
+    }
+}
+
+func update(screen *ebiten.Image) error {
+	select {
+    case event := <-mouseEvents:
+        interaction(event.X, event.Y, g)
+        audio.PlayBeep()
+    default:
+    }
+
+	// if ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft) {
+	// 	x, y := ebiten.CursorPosition()
+	// 	log.Printf("x: %v y: %v", x, y)
+	// 	interaction(x, y, g)
+	// 	audio.PlayBeep()
+	// }
+
+	// if ebiten.IsDrawingSkipped() {
+	// 	return nil
+	// }
 
 	screen.Fill(color.RGBA{0, 0, 0, 0xff})
 	background, _ := ebiten.NewImage(RES, RES, ebiten.FilterDefault)
@@ -225,6 +282,7 @@ func (a *Audio) PlayBeep() {
 }
 
 func main() {
+	initWebsocket()
 	g = emptyGeneration()
 	giveState(g)
 
